@@ -2,7 +2,7 @@ import { speechDispatcher, speechFetch } from "@/lib/speech-transport"
 import { createPublicKey, verify, type JsonWebKey } from "node:crypto"
 export const runtime = "nodejs"
 export const maxDuration = 120
-const routes = new Set(["agent/turn", "audio/transcriptions", "audio/speech", "audio/turn", "voices", "sources"])
+const routes = new Set(["agent/turn", "audio/transcriptions", "audio/speech", "audio/turn", "voices", "sources", "models"])
 let certs: { at: number; keys: (JsonWebKey & { kid: string })[] } | undefined
 async function authorized(req: Request): Promise<boolean> {
   // Public standalone demo: no login. Access verification is opt-in for private deployments.
@@ -31,11 +31,14 @@ async function authorized(req: Request): Promise<boolean> {
 async function relay(req: Request, context: { params: Promise<{path: string[]}> }) {
   if (!await authorized(req)) return Response.json({error:"Sign in through the protected demo domain."}, {status:401})
   const path = (await context.params).path.join("/")
-  if (!routes.has(path) || (req.method === "GET") !== (["voices","sources"].includes(path))) return Response.json({error:"Not found"}, {status:404})
+  if (!routes.has(path) || (req.method === "GET") !== (["voices","sources","models"].includes(path))) return Response.json({error:"Not found"}, {status:404})
   const origin = req.headers.get("origin")
-  if (origin && origin !== new URL(req.url).origin) return Response.json({error:"Origin not allowed"},{status:403})
+  if (origin && new URL(origin).host !== req.headers.get("host")) return Response.json({error:"Origin not allowed"},{status:403})
   const base = process.env.SPEECH_API_URL || "http://127.0.0.1:8787"
   const headers = new Headers({"Content-Type":req.headers.get("content-type") || "application/json"})
+  const model=req.headers.get("x-speech-model")
+  if(model && !["ngen-4.5-sansar","ngen-4-realtime"].includes(model))return Response.json({error:"Unknown speech model"},{status:400})
+  if(model)headers.set("X-Speech-Model",model)
   if (process.env.SPEECH_API_KEY) headers.set("Authorization", `Bearer ${process.env.SPEECH_API_KEY}`)
   if (process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET) {
     headers.set("CF-Access-Client-Id", process.env.CF_ACCESS_CLIENT_ID)

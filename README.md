@@ -47,3 +47,9 @@ Replies use one SSE request containing text deltas, tool events and sentence WAV
 The API exposes seven tools backed by OriginChainDB and a source catalog. Business, calendar, region and weather records are demonstration data, labeled in the interface. Official documentation sources link to their original pages. Database tokens and inference configuration belong to the separate API service.
 
 The public website can invoke the server relay without visitor authentication. The API still requires its bearer key; rate/concurrency limits are enforced by the API.
+
+## Current voice model choices
+
+The UI offers **NGen-4.5 Sansar** and **NGen 4 Realtime**. Selection is forwarded server-side using `X-Speech-Model`; the browser cannot supply a provider URL or credentials. The matching SpeechAPI build must support `/v1/models` and request-specific model routing. Sansar requires the Anumana/LFM3 runtime running on the API host; frontend deployment alone does not install that model. There is no silent fallback between models.
+
+Sansar audio uses streamed mono PCM16 at 24 kHz, scheduled incrementally through Web Audio. WAV replies remain supported for Realtime. Switching models cancels capture/playback and the active request while retaining conversation history. The activity panel separates inference queue time, first PCM and tool timings. Model speed depends on GPU availability; no universal latency guarantee is implied.

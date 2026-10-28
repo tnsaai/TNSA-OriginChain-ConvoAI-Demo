@@ -25,14 +25,14 @@ import {
   X,
 } from "lucide-react"
 import Orb from "@/components/realtime-voice/voice-orb"
-import { type MessageView, type Phase, type ToolCallView, type TurnView, useRealtimeVoice } from "@/components/realtime-voice/use-realtime-voice"
+import { MODEL_CHOICES, type MessageView, type Phase, type ToolCallView, type TurnView, useRealtimeVoice } from "@/components/realtime-voice/use-realtime-voice"
 import { cn } from "@/lib/utils"
 const SUGGESTIONS = [
   "Where's order OC-20417, and will it rain in Mumbai?",
-  "Kestrel's provisioning is stuck. Is Frankfurt healthy?",
+  "ABC's provisioning is stuck. Is Frankfurt healthy?",
   "When is my next meeting with Meridian?",
   "What does the Enterprise plan include?",
-  "Open an urgent ticket for Kestrel about replication lag",
+  "Open an urgent ticket for ABC about replication lag",
 ]
 
 const PHASE_LABEL: Record<Phase, string> = {
@@ -76,7 +76,7 @@ export default function RealtimeVoicePage() {
             <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-700 dark:text-blue-300">OriginChain</span>
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            A voice agent on NGen-Realtime that calls tools while it keeps talking. Everything streams: your words, its words, and every tool call.
+            Your OriginChain voice agent. Choose a model for live transcriptions, streamed replies, and connected tools.
           </p>
         </div>
         <button
@@ -87,6 +87,13 @@ export default function RealtimeVoicePage() {
           <RotateCcw className="size-3.5" />
           Reset
         </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div role="group" aria-label="Voice model" className="inline-flex flex-wrap gap-1 rounded-2xl bg-muted/60 p-1">
+          {MODEL_CHOICES.map(choice=><button key={choice.id} type="button" aria-pressed={voice.model===choice.id} onClick={()=>voice.selectModel(choice.id)} className={cn("rounded-xl px-4 py-2 text-sm font-medium transition-colors",voice.model===choice.id?"bg-background text-foreground shadow-sm":"text-muted-foreground hover:text-foreground")}>{choice.label}</button>)}
+        </div>
+        <p className="text-xs text-muted-foreground">{voice.model==="ngen-4.5-sansar"?"Local Anumana inference":"Older API"} · Switching stops the active session and keeps the conversation.</p>
       </div>
 
       {voice.notice ? <div className="rounded-xl bg-amber-500/10 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">{voice.notice}{voice.audioBlocked ? <button type="button" onClick={() => void voice.enableAudio()} className="ml-3 rounded-full bg-foreground px-3 py-1 text-background">Enable sound</button> : null}</div> : null}
@@ -154,6 +161,7 @@ export default function RealtimeVoicePage() {
             <input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              aria-label="Message to OriginChain"
               placeholder={busy ? "Type to interrupt…" : "Or type to the agent…"}
               className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
@@ -287,7 +295,7 @@ function Conversation({ messages, draft }: { messages: MessageView[]; draft: str
         {messages.length === 0 && !draft ? (
           <div className="flex h-full flex-col items-center justify-center py-12 text-center">
             <p className="font-medium">Nothing said yet</p>
-            <p className="mt-1 max-w-xs text-sm text-muted-foreground">Start a session and speak, or tap a suggestion. Your words appear here as you say them.</p>
+            <p className="mt-1 max-w-xs text-sm text-muted-foreground">Start a session and speak, or tap a suggestion. Your transcriptions and replies appear here.</p>
           </div>
         ) : null}
         {messages.map((m) => (m.role === "user" ? <UserBubble key={m.id} text={m.text} /> : <AssistantText key={m.id} m={m} />))}
@@ -365,14 +373,14 @@ function Turns({ turns }: { turns: TurnView[] }) {
   const ref = useAutoScroll(JSON.stringify(turns.map((t) => [t.status, t.tools.map((c) => c.status), t.events.length])))
   return (
     <section className="flex h-[70svh] min-h-[420px] flex-col overflow-hidden rounded-[24px] bg-muted/40 dark:bg-white/[0.025] lg:h-auto lg:min-h-0">
-      <PanelHeader title="Turns and agent activity" hint="Tool calls run in parallel" />
+      <PanelHeader title="Turns and agent activity" hint="Connected tool activity" />
       <SourceCatalog />
       <div ref={ref} className="panel-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto pb-4 pl-4 pr-1.5">
         {turns.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center py-12 text-center">
             <Wrench className="size-5 text-muted-foreground" />
             <p className="mt-2 font-medium">No turns yet</p>
-            <p className="mt-1 max-w-xs text-sm text-muted-foreground">Each turn shows turn detection, latency, and every tool the agent runs while it talks.</p>
+            <p className="mt-1 max-w-xs text-sm text-muted-foreground">Each turn shows response timing and native model activity.</p>
           </div>
         ) : null}
         {turns.map((t) => (
@@ -387,7 +395,7 @@ function SourceCatalog() {
   const [catalog,setCatalog]=useState<{tools:{name:string;description:string}[];documents:{id:string;title:string;url?:string;kind:string}[]} | null>(null)
   useEffect(()=>{
     const abort=new AbortController();let retry:ReturnType<typeof setTimeout>
-    const load=()=>fetch("/api/speech/sources",{signal:abort.signal}).then(r=>r.ok?r.json():null).then(data=>{if(abort.signal.aborted)return;if(data)setCatalog(data);else retry=setTimeout(load,3000)}).catch(()=>{if(!abort.signal.aborted)retry=setTimeout(load,3000)})
+    const load=()=>fetch("/api/speech/sources",{signal:abort.signal}).then(r=>r.ok?r.json():null).then(data=>{if(abort.signal.aborted)return;if(data)setCatalog(data);else retry=setTimeout(load,5000)}).catch(()=>{if(!abort.signal.aborted)retry=setTimeout(load,5000)})
     void load();return()=>{abort.abort();clearTimeout(retry)}
   },[])
   return <details className="mx-4 mb-3 shrink-0 rounded-xl bg-background px-3 py-2 text-xs">
@@ -399,7 +407,7 @@ function SourceCatalog() {
   </details>
 }
 
-const ms = (v?: number) => (v == null || Number.isNaN(v) ? "–" : v < 1000 ? `${v} ms` : `${(v / 1000).toFixed(1)} s`)
+const ms = (v?: number) => (v == null || Number.isNaN(v) ? "–" : v < 1000 ? `${Math.round(v)} ms` : `${(v / 1000).toFixed(1)} s`)
 
 function TurnCard({ turn }: { turn: TurnView }) {
   const status = {
@@ -414,7 +422,7 @@ function TurnCard({ turn }: { turn: TurnView }) {
         <span className="text-xs font-semibold tabular-nums text-muted-foreground">Turn {turn.index}</span>
         <span className={cn("rounded-full px-1.5 py-px text-[10px] font-medium", status.cls)}>{status.label}</span>
         {turn.mode ? (
-          <span className="ml-auto rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">{turn.mode === "model" ? "NGen-Realtime" : "Scripted agent"}</span>
+          <span className="ml-auto rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">{turn.model ?? (turn.mode === "model" ? "Selected model" : "Scripted agent")}</span>
         ) : null}
       </div>
       <p className="mt-1.5 line-clamp-2 text-sm">&ldquo;{turn.userText}&rdquo;</p>

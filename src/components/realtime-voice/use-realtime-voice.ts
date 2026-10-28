@@ -1,17 +1,19 @@
 "use client"
 
 // Client side of the Realtime Voice playground.
-// Audio in:  echo-cancelled mic -> voice-activity detection (turn detection) -> TNSA STT with automatic language
+// Audio in:  echo-cancelled mic -> voice-activity detection (turn detection) -> Anumana ASR with automatic language
 //            detection, called for live partials while the user talks and once for the final transcript.
 // Agent:     POST /api/speech/agent/turn, read the SSE stream of text deltas and tool-call events.
 // Audio out: text deltas are cut into sentences and spoken as they arrive, so speech starts before the turn ends.
-// Barge-in:  user speech while the agent is talking ducks it at once and stops it when TNSA STT confirms new words.
+// Barge-in:  user speech while the agent is talking ducks it at once and stops it when Anumana ASR confirms new words.
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { ensureAudioRunning, canReuseTranscript, createAudioLimiter, type TranscriptRequest } from "@/lib/voice-performance"
 import type { VoiceLang } from "@/lib/realtime/voices"
 import { replyLang, scriptLang } from "@/lib/realtime/language"
 
+export const MODEL_CHOICES=[{id:"ngen-4.5-sansar",label:"NGen-4.5 Sansar"},{id:"ngen-4-realtime",label:"NGen 4 Realtime"}] as const
+export type SpeechModel=typeof MODEL_CHOICES[number]["id"]
 export type Phase = "idle" | "connecting" | "listening" | "thinking" | "speaking"
 
 export type ToolCallView = {
@@ -31,6 +33,7 @@ export type TurnView = {
   userText: string
   startedAt: number
   status: "streaming" | "done" | "interrupted" | "error"
+  model?: string
   mode?: "model" | "mock"
   firstTextMs?: number
   firstAudioMs?: number
@@ -64,7 +67,7 @@ type Utterance = {
   silentMs: number
   /** The agent was audible at some point while this was captured (echo is possible). */
   duringPlayback: boolean
-  /** TNSA STT confirmed it is the user talking over the agent. */
+  /** Anumana ASR confirmed it is the user talking over the agent. */
   confirmed: boolean
   discard: boolean
   lastInterimAt: number
@@ -107,10 +110,10 @@ const newVad = (): VadState => ({ floor: 0, echoPeak: 0, spikeMax: 0, above: 0, 
 
 /** Playback the detector must hear before it trusts its echo level for a fast barge-in. */
 const ECHO_CALIBRATION_MS = 1500
-/** What TNSA STT typically invents from faint noise or echo; never a turn on its own. */
+/** What Anumana ASR typically invents from faint noise or echo; never a turn on its own. */
 const STT_FILLER = /^(thank you\.?|thanks( for watching)?\.?|you\.?|bye\.?|okay\.?|ok\.?|so\.?|hmm+\.?|شكرا(ً)?\.?|شكراً لكم\.?|اشتركوا في القناة\.?|\.+)$/i
 
-/** Mono PCM blocks -> 16 kHz 16-bit WAV for TNSA STT. */
+/** Mono PCM blocks -> 16 kHz 16-bit WAV for Anumana ASR. */
 function encodeWav(chunks: Float32Array[], rate: number): Blob {
   const total = chunks.reduce((n, c) => n + c.length, 0)
   const ratio = rate / STT_RATE
@@ -150,7 +153,7 @@ function encodeWav(chunks: Float32Array[], rate: number): Blob {
 const GREETING = "Hi, I'm the OriginChain voice agent. Ask me about orders, cluster health, the calendar or pricing, and I'll check while we talk."
 
 const GREETING_AR = "هلا، أنا مساعد OriginChain الصوتي. اسألني عن الطلبات أو حالة الخوادم أو المواعيد، وأنا أتحقق لك وأنا أكلمك."
-/** TNSA TTS takes at most 200 characters per request; leave room for trimming. */
+/** Anumana TTS takes at most 200 characters per request; leave room for trimming. */
 const TTS_SAFE_CHARS = 190
 
 /** Cuts text into pieces under the TTS limit, preferring commas (including Arabic ،) and then spaces. */
@@ -168,7 +171,7 @@ function splitForTts(text: string): string[] {
   return out
 }
 
-/** English by default (TNSA TTS English, Diana); Arabic text switches to TNSA TTS Arabic (Noura), even mid-sentence. */
+/** English by default (Anumana TTS English, Diana); Arabic text switches to Anumana TTS Arabic (Noura), even mid-sentence. */
 const VOICE_FOR: Record<VoiceLang, string> = { en: "maya", ar: "layla" }
 
 const ARABIC_LETTER = /[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/
@@ -214,7 +217,7 @@ function scriptRuns(text: string): { lang: VoiceLang; text: string }[] {
 
 const MIN_SWITCH_WORDS = 3
 
-/** TNSA TTS ends every clip with up to ~0.9 s of silence; trim it so voice switches and sentence joins sound continuous. */
+/** Anumana TTS ends every clip with up to ~0.9 s of silence; trim it so voice switches and sentence joins sound continuous. */
 function trimTrailingSilence(ctx: AudioContext, buffer: AudioBuffer, keepMs = 90): AudioBuffer {
   const data = buffer.getChannelData(0)
   let last = data.length - 1
@@ -230,6 +233,8 @@ const uid = () => Math.random().toString(36).slice(2, 10)
 const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []
 export function useRealtimeVoice() {
   const [phase, setPhase] = useState<Phase>("idle")
+  const [model,setModel]=useState<SpeechModel>("ngen-4.5-sansar")
+  const modelRef=useRef<SpeechModel>("ngen-4.5-sansar")
   const [messages, setMessages] = useState<MessageView[]>([])
   const [turns, setTurns] = useState<TurnView[]>([])
   const [userDraft, setUserDraft] = useState("")
@@ -240,7 +245,7 @@ export function useRealtimeVoice() {
   const [notice, setNotice] = useState<string | null>(null)
   const [srSupported, setSrSupported] = useState(true)
   // Language follows the conversation: the agent answers in the user's language, each sentence is voiced by the
-  // TNSA TTS model for its script (English or Arabic), and speech recognition follows the user's last language.
+  // Anumana TTS model for its script (English or Arabic), and speech recognition follows the user's last language.
   const [lang, setLangState] = useState<VoiceLang>("en")
   const langRef = useRef<VoiceLang>("en")
   const ttsUnavailable = useRef<Record<VoiceLang, boolean>>({ en: false, ar: false })
@@ -280,11 +285,17 @@ export function useRealtimeVoice() {
     /** Sentences waiting to be spoken, each with its audio already being fetched. */
     queue: { text: string; audio: Promise<AudioBuffer | null> }[]
     spoken: number
+    pcmPending: number
+    lastToolAt?: number
+    pcmStarted?: boolean
     streamDone: boolean
     speaking: boolean
     /** The sentence being spoken and the one before it: what the mic may hear back as echo. */
     recent: string
   } | null>(null)
+  const pcmSources=useRef(new Set<AudioBufferSourceNode>())
+  const pcmNext=useRef(0)
+  const pcmSchedule=useRef<Promise<void>>(Promise.resolve())
   const speakPulse = useRef(0)
   // Chrome can garbage-collect an utterance mid-sentence and never fire onend, so keep a reference until it finishes.
   const liveUtterances = useRef(new Set<SpeechSynthesisUtterance>())
@@ -301,6 +312,7 @@ export function useRealtimeVoice() {
   }, [messages])
   useEffect(() => {
     voiceOnRef.current = voiceOn
+    if(!voiceOn){for(const source of pcmSources.current){try{source.stop()}catch{}}pcmNext.current=0}
   }, [voiceOn])
   useEffect(() => {
     micMutedRef.current = micMuted
@@ -324,7 +336,7 @@ export function useRealtimeVoice() {
     const target: Levels = { level: 0, bass: 0, treble: 0 }
     const out = outAnalyserRef.current
     if (phaseRef.current === "speaking" && out && sourceRef.current) {
-      // Real output level of the TNSA TTS audio that is playing.
+      // Real output level of the Anumana TTS audio that is playing.
       const data = new Uint8Array(out.frequencyBinCount)
       out.getByteFrequencyData(data)
       const band = (from: number, to: number) => {
@@ -361,8 +373,7 @@ export function useRealtimeVoice() {
   }, [])
 
   // ---- Speech out ---------------------------------------------------------------------------------------------
-  // Each sentence is synthesised by NGenTTS-V2 (TNSA speech service) as soon as it is complete, while earlier sentences play,
-  // and played through Web Audio so the orb follows the real output level. The browser voice is a per-sentence fallback.
+  // Native answers stream PCM directly. Legacy providers retain sentence WAV playback.
   const outCtx = useCallback(() => {
     if (!outCtxRef.current || outCtxRef.current.state === "closed") {
       const ctx = new AudioContext()
@@ -388,7 +399,7 @@ export function useRealtimeVoice() {
         release = await ttsLimiter.current(signal)
         const res = await fetch("/api/speech/audio/speech", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Speech-Model":modelRef.current },
           body: JSON.stringify({ input: text, voice: VOICE_FOR[lang], language: lang }),
           signal,
         })
@@ -397,14 +408,14 @@ export function useRealtimeVoice() {
           // Configuration problems (terms not accepted, no key) won't fix themselves mid-session: stop asking.
           if (res.status === 400 || res.status === 401 || res.status === 403) {
             ttsUnavailable.current[lang] = true
-            setNotice("The speech service is unavailable. Retrying playback with your browser voice.")
+            setNotice("The speech service is unavailable. Please retry speech playback.")
           }
           return null
         }
         const ctx = outCtx()
         return trimTrailingSilence(ctx, await ctx.decodeAudioData(await res.arrayBuffer()))
       } catch {
-        if (!signal.aborted) setNotice("Could not load speech audio. Trying your browser voice.")
+        if (!signal.aborted) setNotice("Could not load speech audio. Please retry speech playback.")
         return null
       } finally { release?.() }
     },
@@ -465,37 +476,8 @@ export function useRealtimeVoice() {
     let watchdog: ReturnType<typeof setTimeout> | undefined
 
     const speakWithBrowser = () => {
-      // Watchdog: if the browser never reports the end of this sentence, move on instead of hanging in "speaking".
-      watchdog = setTimeout(() => {
-        window.speechSynthesis?.cancel()
-        done()
-      }, 3000 + sentence.length * 110)
-      if (!voiceOnRef.current || typeof window === "undefined" || !window.speechSynthesis) {
-        markAudio()
-        setTimeout(done, Math.min(2200, 40 * sentence.length))
-        return
-      }
-      const u = new SpeechSynthesisUtterance(sentence)
-      const sentenceLang = scriptLang(sentence)
-      const v = pickVoice(sentenceLang)
-      if (v) u.voice = v
-      u.lang = sentenceLang === "ar" ? "ar-SA" : "en-IN"
-      u.rate = 1.06
-      liveUtterances.current.add(u)
-      const end = () => {
-        liveUtterances.current.delete(u)
-        done()
-      }
-      u.onstart = markAudio
-      u.onboundary = () => (speakPulse.current = 0.28)
-      u.onend = end
-      u.onerror = (event) => {
-        if (event.error !== "canceled" && event.error !== "interrupted") { setAudioBlocked(true); setNotice("Your browser could not play speech. Select Enable sound and try again.") }
-        end()
-      }
-      // Chrome sometimes leaves the engine paused after cancel(); resume before queueing.
-      window.speechSynthesis.resume()
-      window.speechSynthesis.speak(u)
+      if(voiceOnRef.current)setNotice("Speech is unavailable for this sentence. The text remains visible; please retry.")
+      done()
     }
 
     void item.audio.then(async (buffer) => {
@@ -572,6 +554,8 @@ export function useRealtimeVoice() {
       if (!r) return
       response.current = null
       r.abort.abort()
+      for(const source of pcmSources.current){try{source.stop()}catch{}}
+      pcmSources.current.clear();pcmNext.current=0
       if (typeof window !== "undefined") window.speechSynthesis?.cancel()
       const source = sourceRef.current
       sourceRef.current = null
@@ -617,7 +601,7 @@ export function useRealtimeVoice() {
       setPhase("thinking")
 
       const abort = new AbortController()
-      response.current = { turnId, msgId, abort, text: "", pending: "", queue: [], spoken: 0, streamDone: false, speaking: false, recent: "" }
+      response.current = { turnId, msgId, abort, text: "", pending: "", queue: [], spoken: 0, pcmPending:0, streamDone: false, speaking: false, recent: "" }
       const r = response.current
 
       const history = [...prior, userMsg]
@@ -627,7 +611,7 @@ export function useRealtimeVoice() {
       try {
         const res = await fetch("/api/speech/audio/turn", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "X-Speech-Model":modelRef.current },
           body: JSON.stringify({ input:text, messages:history.slice(0,-1).slice(-14), speak:voiceOnRef.current }),
           signal: abort.signal,
         })
@@ -663,13 +647,14 @@ export function useRealtimeVoice() {
         patchTurn(turnId, (t) => ({ ...t, status: "error", error: message, events: [...t.events, { at: Date.now(), label: `Error: ${message}` }] }))
         patchMessage(msgId, (m) => ({ ...m, streaming: false, text: m.text || "Sorry, I lost the connection for that one." }))
         if (response.current === r) response.current = null
+        for(const source of pcmSources.current){try{source.stop()}catch{}}pcmSources.current.clear();pcmNext.current=0
         setPhase(activeRef.current ? "listening" : "idle")
       }
 
       function handleEvent(event: string, data: Record<string, unknown>) {
         switch (event) {
           case "response.created":
-            patchTurn(turnId, (t) => ({ ...t, mode: data.mode as TurnView["mode"], events: [...t.events, { at: Date.now(), label: `Response started on ${data.model}` }] }))
+            patchTurn(turnId, (t) => ({ ...t, mode: data.mode as TurnView["mode"], model:String(data.model||MODEL_CHOICES.find(m=>m.id===modelRef.current)?.label), events: [...t.events, { at: Date.now(), label: `Response started on ${data.model}` }] }))
             break
           case "response.mode":
             patchTurn(turnId, (t) => ({ ...t, mode: data.mode as TurnView["mode"], events: [...t.events, { at: Date.now(), label: "Model unavailable, scripted agent took over" }] }))
@@ -680,14 +665,45 @@ export function useRealtimeVoice() {
             r.text += delta
             const isNarration = data.source === "narration"
             patchMessage(msgId, (m) => ({ ...m, text: r.text, narration: isNarration ? [...(m.narration ?? []), [start, r.text.length]] : m.narration }))
-            patchTurn(turnId, (t) => (t.firstTextMs != null ? t : { ...t, firstTextMs: Date.now() - t.startedAt }))
+            if(!isNarration)patchTurn(turnId, (t) => (t.firstTextMs != null ? t : { ...t, firstTextMs: Date.now() - t.startedAt }))
             break
           }
           case "response.audio.delta": {
             const sentence=String(data.text??"")
             const bytes=Uint8Array.from(atob(String(data.audio??"")),char=>char.charCodeAt(0))
             const ctx=outCtx()
-            const audio=ctx.decodeAudioData(bytes.buffer).then(buffer=>trimTrailingSilence(ctx,buffer)).catch(()=>{setNotice("Could not decode speech audio. Trying your browser voice.");return null})
+            if(data.format==="pcm16"){
+              if(!voiceOnRef.current)break
+              const rate=Number(data.sample_rate||24000)
+              if(bytes.length%2 || rate!==24000)throw new Error("Invalid native PCM stream")
+              const buffer=ctx.createBuffer(1,bytes.length/2,rate),channel=buffer.getChannelData(0),view=new DataView(bytes.buffer)
+              for(let i=0;i<channel.length;i++)channel[i]=view.getInt16(i*2,true)/32768
+              r.pcmPending++;r.speaking=true
+              pcmSchedule.current=pcmSchedule.current.then(async()=>{
+                if(response.current!==r)return
+                await ensureAudioRunning(ctx)
+                if(response.current!==r)return
+                setAudioBlocked(false)
+                const source=ctx.createBufferSource();source.buffer=buffer;source.connect(outAnalyserRef.current!)
+                const when=Math.max(ctx.currentTime+.015,pcmNext.current);pcmNext.current=when+buffer.duration
+                pcmSources.current.add(source);sourceRef.current=source;setPhase("speaking")
+                if(!r.pcmStarted){
+                  outGainRef.current?.gain.setTargetAtTime(1,ctx.currentTime,.005)
+                  r.pcmStarted=true
+                  patchTurn(turnId,t=>({...t,firstAudioMs:Date.now()-t.startedAt+Math.round((when-ctx.currentTime)*1000),events:r.lastToolAt?[...t.events,{at:Date.now(),label:`Tool complete to scheduled audio: ${Math.round(Date.now()-r.lastToolAt+(when-ctx.currentTime)*1000)} ms`}]:t.events}))
+                }
+                source.onended=()=>{
+                  pcmSources.current.delete(source);if(sourceRef.current===source)sourceRef.current=null
+                  if(response.current!==r)return
+                  r.pcmPending--;r.spoken=r.text.length;echoText.current=r.text.slice(-700);lastAudioAt.current=Date.now()
+                  patchMessage(msgId,m=>({...m,spokenChars:r.spoken}))
+                  if(r.pcmPending===0){r.speaking=false;finishIfDrained();if(response.current===r&&!r.streamDone)setPhase("thinking")}
+                }
+                source.start(when)
+              }).catch(()=>{if(response.current===r){r.pcmPending=0;r.speaking=false;setAudioBlocked(true);setNotice("Native audio playback was blocked. Enable sound and try again.");finishIfDrained()}})
+              break
+            }
+            const audio=ctx.decodeAudioData(bytes.buffer).then(buffer=>trimTrailingSilence(ctx,buffer)).catch(()=>{setNotice("Could not decode speech audio. Please retry speech playback.");return null})
             r.queue.push({text:sentence,audio})
             speakNext()
             break
@@ -699,6 +715,7 @@ export function useRealtimeVoice() {
             }))
             break
           case "response.function_call.completed":
+            r.lastToolAt=Date.now()
             patchTurn(turnId, (t) => ({
               ...t,
               tools: t.tools.map((c) =>
@@ -706,6 +723,14 @@ export function useRealtimeVoice() {
               ),
             }))
             break
+          case "response.latency":
+            logEvent(turnId,`Tool complete to first PCM at server: ${data.tool_to_first_pcm_ms} ms`)
+            break
+          case "response.inference.metrics": {
+            const metrics=data.metrics as {first_pcm_seconds?:number;queue_seconds?:number}|undefined
+            if(metrics)logEvent(turnId,`Model first PCM: ${Math.round((metrics.first_pcm_seconds||0)*1000)} ms; GPU queue: ${Math.round((metrics.queue_seconds||0)*1000)} ms`)
+            break
+          }
           case "response.done":
             patchTurn(turnId, (t) => ({
               ...t,
@@ -719,13 +744,13 @@ export function useRealtimeVoice() {
         }
       }
     },
-    [finishIfDrained, followLanguage, interrupt, outCtx, patchMessage, patchTurn, speakNext]
+    [finishIfDrained, followLanguage, interrupt, outCtx, patchMessage, patchTurn, speakNext, logEvent]
   )
   runTurnRef.current = runTurn
 
   // ---- Speech in ----------------------------------------------------------------------------------------------
   // The echo-cancelled mic track is captured as PCM. A voice-activity detector finds where each utterance starts and
-  // ends; the audio goes to TNSA STT (NGenSTT-V2), which detects English or Arabic by itself, so the user can switch
+  // ends; the audio goes to Anumana ASR (NGenSTT-V2), which detects English or Arabic by itself, so the user can switch
   // language at any time. While the user talks, the utterance so far is transcribed about once a second for the live
   // transcript. Because the track is echo-cancelled, the agent's own playback is mostly removed before it gets here.
 
@@ -755,7 +780,7 @@ export function useRealtimeVoice() {
     }
     const promise = (async () => {
       const res = await fetch("/api/speech/audio/transcriptions", {
-        method:"POST", headers:{"Content-Type":"audio/wav"}, body:encodeWav(chunks,u.rate),
+        method:"POST", headers:{"Content-Type":"audio/wav","X-Speech-Model":modelRef.current}, body:encodeWav(chunks,u.rate),
         signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])
       })
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `Transcription failed (${res.status})`)
@@ -775,7 +800,7 @@ export function useRealtimeVoice() {
 
   /**
    * Whether text heard while the agent was playing is really the user talking over it. Leftover echo is faint and
-   * TNSA STT turns it into the agent's own words or stock filler ("Thank you."), so require at least two new real words.
+   * Anumana ASR turns it into the agent's own words or stock filler ("Thank you."), so require at least two new real words.
    */
   const isBargeIn = useCallback(
     (u: Utterance, text: string) => {
@@ -807,7 +832,7 @@ export function useRealtimeVoice() {
         if (u.discard || u.transcriptRequest !== request) return
         if (u.duringPlayback && !u.confirmed) {
           if (!isBargeIn(u, text)) {
-            // The agent's own words or TNSA STT filler, judged on enough audio: let the agent carry on. An empty or
+            // The agent's own words or Anumana ASR filler, judged on enough audio: let the agent carry on. An empty or
             // half-word partial early on proves nothing, so keep listening for the next one.
             if (text && u.voicedMs > 700 && (isOwnVoice(u, text) || STT_FILLER.test(text.trim()))) {
               u.discard = true
@@ -891,7 +916,7 @@ export function useRealtimeVoice() {
         if (audible) {
           // Learn the echo level slowly (~1 s to settle) from blocks below the threshold: steady echo is learned, but a
           // voice starting within a few blocks can't drag the threshold up ahead of itself. Bursts that turn out to be
-          // echo are learned through learnEcho() once TNSA STT confirms them.
+          // echo are learned through learnEcho() once Anumana ASR confirms them.
           if (rms <= startAt) vad.echoPeak = rms > vad.echoPeak ? vad.echoPeak + (rms - vad.echoPeak) * 0.05 : vad.echoPeak * 0.997
           vad.spikeMax = rms > startAt ? Math.max(vad.spikeMax, rms) : 0
           vad.heardMs += blockMs
@@ -959,7 +984,7 @@ export function useRealtimeVoice() {
         return
       }
       // Fast barge-in: a voice far louder than the agent's leftover echo, held for ~0.3 s, is the user talking over it.
-      // Stop right away instead of waiting for TNSA STT (quieter speech still goes through the transcript check below).
+      // Stop right away instead of waiting for Anumana ASR (quieter speech still goes through the transcript check below).
       // Armed only once the echo level has been learned from ~1.5 s of playback, so loud speakers can't trip it early.
       if (u.duringPlayback && !u.confirmed && !u.discard && response.current) {
         // Total loud time in the first moments of speech: syllables come in 100-150 ms bursts with gaps between them.
@@ -997,7 +1022,7 @@ export function useRealtimeVoice() {
     const msgId = uid()
     const greeting = langRef.current === "ar" ? GREETING_AR : GREETING
     setMessages((ms) => [...ms, { id: msgId, turnId, role: "assistant", text: greeting, streaming: true, spokenChars: 0 }])
-    response.current = { turnId, msgId, abort: new AbortController(), text: greeting, pending: greeting, queue: [], spoken: 0, streamDone: true, speaking: false, recent: "" }
+    response.current = { turnId, msgId, abort: new AbortController(), text: greeting, pending: greeting, queue: [], spoken: 0, pcmPending:0, streamDone: true, speaking: false, recent: "" }
     setPhase("thinking")
     flushSentences(true)
     try {
@@ -1012,7 +1037,7 @@ export function useRealtimeVoice() {
       analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.7
       source.connect(analyser)
-      // Raw PCM for the voice detector and TNSA STT. The processor must reach the destination to run; it outputs silence.
+      // Raw PCM for the voice detector and Anumana ASR. The processor must reach the destination to run; it outputs silence.
       const proc = ctx.createScriptProcessor(2048, 1, 1)
       proc.onaudioprocess = (e) => onMicBlockRef.current(new Float32Array(e.inputBuffer.getChannelData(0)), ctx.sampleRate)
       const mute = ctx.createGain()
@@ -1072,7 +1097,13 @@ export function useRealtimeVoice() {
     catch { setAudioBlocked(true); setNotice("Sound is blocked by this browser. Open the demo in a browser tab and allow audio playback.") }
   }, [outCtx])
 
+  const selectModel=useCallback((next:SpeechModel)=>{
+    if(next===modelRef.current)return
+    stop();modelRef.current=next;setModel(next);ttsUnavailable.current={en:false,ar:false}
+    setNotice(`${MODEL_CHOICES.find(m=>m.id===next)?.label} selected. Start a session or type a message. Conversation history is kept.`)
+  },[stop])
   return {
+    model,selectModel,
     audioBlocked,
     enableAudio,
     phase,
