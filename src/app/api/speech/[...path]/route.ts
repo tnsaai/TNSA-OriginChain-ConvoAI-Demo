@@ -1,3 +1,4 @@
+import {embeddedSpeech} from "@/lib/embedded-speech"
 import { speechDispatcher, speechFetch } from "@/lib/speech-transport"
 import { createPublicKey, verify, type JsonWebKey } from "node:crypto"
 export const runtime = "nodejs"
@@ -34,20 +35,24 @@ async function relay(req: Request, context: { params: Promise<{path: string[]}> 
   if (!routes.has(path) || (req.method === "GET") !== (["voices","sources","models"].includes(path))) return Response.json({error:"Not found"}, {status:404})
   const origin = req.headers.get("origin")
   if (origin && new URL(origin).host !== req.headers.get("host")) return Response.json({error:"Origin not allowed"},{status:403})
-  const base = process.env.SPEECH_API_URL || "http://127.0.0.1:8787"
+  const external = process.env.SPEECH_RELAY_MODE === "external"
   const headers = new Headers({"Content-Type":req.headers.get("content-type") || "application/json"})
   const model=req.headers.get("x-speech-model")
   if(model && !["ngen-4.5-sansar","ngen-4-realtime"].includes(model))return Response.json({error:"Unknown speech model"},{status:400})
   if(model)headers.set("X-Speech-Model",model)
-  if (process.env.SPEECH_API_KEY) headers.set("Authorization", `Bearer ${process.env.SPEECH_API_KEY}`)
-  if (process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET) {
+  if (external && process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET) {
     headers.set("CF-Access-Client-Id", process.env.CF_ACCESS_CLIENT_ID)
     headers.set("CF-Access-Client-Secret", process.env.CF_ACCESS_CLIENT_SECRET)
   }
   try {
+    const {base,key} = external
+      ? {base: process.env.SPEECH_API_URL, key: process.env.SPEECH_API_KEY}
+      : await embeddedSpeech()
+    if (!base) return Response.json({error:"Speech API URL is missing."},{status:503})
+    if (key) headers.set("Authorization", `Bearer ${key}`)
     // Stream bodies with a limit, without buffering audio twice on Vercel.
     let size = 0
-    const limit = path === "audio/transcriptions" ? 4 * 1024 * 1024 : 256 * 1024
+    const limit = path === "audio/transcriptions" ? 4 * 1024 * 1024 : path === "audio/turn" ? Math.ceil(4 * 1024 * 1024 * 4 / 3) + 256 * 1024 : 256 * 1024
     const body = req.body?.pipeThrough(new TransformStream({transform(chunk, controller) {
       size += chunk.byteLength
       if (size > limit) throw new Error("Request too large")

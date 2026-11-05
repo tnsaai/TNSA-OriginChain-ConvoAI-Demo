@@ -93,7 +93,7 @@ export default function RealtimeVoicePage() {
         <div role="group" aria-label="Voice model" className="inline-flex flex-wrap gap-1 rounded-2xl bg-muted/60 p-1">
           {MODEL_CHOICES.map(choice=><button key={choice.id} type="button" aria-pressed={voice.model===choice.id} onClick={()=>voice.selectModel(choice.id)} className={cn("rounded-xl px-4 py-2 text-sm font-medium transition-colors",voice.model===choice.id?"bg-background text-foreground shadow-sm":"text-muted-foreground hover:text-foreground")}>{choice.label}</button>)}
         </div>
-        <p className="text-xs text-muted-foreground">{voice.model==="ngen-4.5-sansar"?"Local Anumana inference":"Older API"} · Switching stops the active session and keeps the conversation.</p>
+        <p className="text-xs text-muted-foreground">{voice.model==="ngen-4.5-sansar"?"Sansar voice inference":"Older API"} · Switching stops the active session and keeps the conversation.</p>
       </div>
 
       {voice.notice ? <div className="rounded-xl bg-amber-500/10 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">{voice.notice}{voice.audioBlocked ? <button type="button" onClick={() => void voice.enableAudio()} className="ml-3 rounded-full bg-foreground px-3 py-1 text-background">Enable sound</button> : null}</div> : null}
