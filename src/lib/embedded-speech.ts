@@ -15,10 +15,10 @@ export function embeddedSpeech() {
 async function start() {
   process.env.SANSAR_HOSTED_ONLY = "1"
   process.env.SPEECH_API_KEYS ||= randomBytes(32).toString("hex")
-  const {config} = await import("../../api/src/config.ts")
+  const {config} = await import("../server/speech/config.ts")
   const key = config.apiKeys[0]
   if (!key) throw new Error("SPEECH_API_KEYS is required")
-  const {server} = await import("../../api/src/server.ts")
+  const {server} = await import("../server/speech/server.ts")
   if (!server.listening) {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject)
