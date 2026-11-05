@@ -34,7 +34,9 @@ Import this repository using the Next.js preset, with the repository root as the
 Set the server-only provider and OriginChain variables from `.env.example`
 in the deployment environment. Use Node 24. For the legacy relay deployment,
 set `SPEECH_RELAY_MODE=external`, `SPEECH_API_URL`, and `SPEECH_API_KEY`.
-Keep credentials in server environment settings.
+Existing deployments with a speech API URL can use the legacy relay when the
+embedded provider settings are absent and no relay mode is set. Keep
+credentials in server environment settings.
 
 ## Streaming and tools
 

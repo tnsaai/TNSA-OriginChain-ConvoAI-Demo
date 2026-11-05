@@ -35,7 +35,16 @@ async function relay(req: Request, context: { params: Promise<{path: string[]}> 
   if (!routes.has(path) || (req.method === "GET") !== (["voices","sources","models"].includes(path))) return Response.json({error:"Not found"}, {status:404})
   const origin = req.headers.get("origin")
   if (origin && new URL(origin).host !== req.headers.get("host")) return Response.json({error:"Origin not allowed"},{status:403})
-  const external = process.env.SPEECH_RELAY_MODE === "external"
+  const mode = process.env.SPEECH_RELAY_MODE
+  const embeddedReady = Boolean(process.env.UPSTREAM_API_KEY) &&
+    (process.env.REQUIRE_DATABASE === "0" || Boolean(
+      process.env.ORIGINCHAIN_BASE_URL && process.env.ORIGINCHAIN_TOKEN && process.env.ORIGINCHAIN_TENANT
+    ))
+  // Existing deployments may only have the legacy relay credentials.
+  const external = mode === "external" || (!mode && !embeddedReady && Boolean(process.env.SPEECH_API_URL))
+  if (!external && !embeddedReady) {
+    return Response.json({error:"Speech service credentials are missing from the server environment."},{status:503})
+  }
   const headers = new Headers({"Content-Type":req.headers.get("content-type") || "application/json"})
   const model=req.headers.get("x-speech-model")
   if(model && !["ngen-4.5-sansar","ngen-4-realtime"].includes(model))return Response.json({error:"Unknown speech model"},{status:400})
