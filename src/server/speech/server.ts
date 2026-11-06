@@ -103,6 +103,9 @@ function events(res:ServerResponse) {
 async function combinedTurn(req:IncomingMessage,res:ServerResponse,signal:AbortSignal) {
   const body=await readJson(req,Math.ceil(MAX_AUDIO*4/3)+MAX_JSON)
   if(body.voice!==undefined&&(typeof body.voice!=="string"||!VOICES[body.voice]))throw new HttpError(400,"Unknown voice")
+  if(body.customPrompt!==undefined && (typeof body.customPrompt!=="string" || body.customPrompt.length>4000))
+    throw new HttpError(400,"Custom instructions must be at most 4000 characters")
+  const customPrompt=typeof body.customPrompt==="string"?body.customPrompt.trim():""
   const prior=body.messages??[]
   if(!Array.isArray(prior)||prior.length>30)throw new HttpError(400,"Invalid conversation history")
   let text=typeof body.input==="string"?body.input.trim():""
@@ -129,7 +132,7 @@ async function combinedTurn(req:IncomingMessage,res:ServerResponse,signal:AbortS
         if(lastTool!==undefined && firstAfterTool===undefined){firstAfterTool=now-lastTool;emit("response.latency",{tool_to_first_pcm_ms:firstAfterTool,scope:"Completed tool event to PCM at agent server; excludes browser transport/playback."})}
       }
       emit(event,event==="response.done"?{...data,audio_chunks:chunks,tool_to_first_pcm_ms:firstAfterTool}:data)
-    },signal,msg=>log({event:"agent_error",detail:msg}),{streamAudio:true})
+    },signal,msg=>log({event:"agent_error",detail:msg}),{streamAudio:true,customPrompt})
     await emit.flush();res.end();return
   }
   let pending="",sequence=0,done:Record<string,unknown>|undefined,failed=false
@@ -175,7 +178,7 @@ async function combinedTurn(req:IncomingMessage,res:ServerResponse,signal:AbortS
       while((match=pending.match(/^([\s\S]*?[.!?؟](?:\s|$))/))){enqueue(match[1]);pending=pending.slice(match[1].length)}
       if(pending.length>400){const pieces=chunkText(pending);for(const part of pieces.slice(0,-1))enqueue(part);pending=pieces.at(-1)??""}
     }
-  },signal,msg=>log({event:"agent_error",detail:msg}))
+  },signal,msg=>log({event:"agent_error",detail:msg}),{customPrompt})
   if(!failed)enqueue(pending)
   await queue
   if(done&&!failed)emit("response.done",{...done,audio_chunks:sequence})
@@ -202,8 +205,8 @@ async function handleRequest(req:IncomingMessage,res:ServerResponse){
     if(req.method==="POST" && config.inferenceProvider==="anumana" && process.env.SANSAR_HOSTED_ONLY==="1" && !process.env.TNSA_API_KEY && (path==="/v1/agent/turn"||path==="/v1/audio/turn"))
       throw new HttpError(503,"Hosted Sansar is missing its tenant API key")
     if(req.method==="GET"&&path==="/v1/sources") {
-      const documents=await database().list<{id:string;title:string;sourceUrl?:string;acl?:unknown}>("documents",abort.signal)
-      return send(res,200,{ready:true,database:"OriginChainDB",namespace:database().options.namespace,tools:TOOL_SPECS.map(t=>({name:t.function.name,description:t.function.description})),documents:documents.filter(d=>!d.acl).map(d=>({id:d.id,title:d.title,url:d.sourceUrl,kind:d.sourceUrl?"documentation":"demo_record"}))})
+      const schemas=await database().schemas(abort.signal)
+      return send(res,200,{ready:true,database:"OriginChainDB",tools:TOOL_SPECS.map(t=>({name:t.function.name,description:t.function.description})),documents:schemas.filter(s=>["store.products","store.orders","academy_industry_20261029_1308.inventory_replenishment","mf.categories"].includes(s)).map(id=>({id,title:id,kind:"database"}))})
     }
     if(req.method==="GET"&&path==="/v1/models")return send(res,200,{models:MODEL_OPTIONS.map(m=>({id:m.id,label:m.label,execution:m.provider==="anumana"?(process.env.TNSA_API_KEY||process.env.SANSAR_HOSTED_ONLY==="1"?"Hosted Sansar":"Local Anumana"):"Older API",configured:m.provider==="anumana"?!!process.env.TNSA_API_KEY||(process.env.SANSAR_HOSTED_ONLY!=="1"&&!!process.env.ANUMANA_API_URL):!!config.upstream.apiKey}))})
     if(req.method==="GET"&&path==="/v1/voices")return send(res,200,{model:PUBLIC_MODELS.tts,default:DEFAULT_VOICE,voices:Object.entries(VOICES).map(([id,v])=>({id,language:v.lang,label:v.label}))})

@@ -12,7 +12,7 @@ import { ensureAudioRunning, canReuseTranscript, createAudioLimiter, type Transc
 import type { VoiceLang } from "@/lib/realtime/voices"
 import { replyLang, scriptLang } from "@/lib/realtime/language"
 
-export const MODEL_CHOICES=[{id:"ngen-4.5-sansar",label:"NGen-4.5 Sansar"},{id:"ngen-4-realtime",label:"NGen 4 Realtime"}] as const
+export const MODEL_CHOICES=[{id:"ngen-4-realtime",label:"NGen 4 Realtime"}] as const
 export type SpeechModel=typeof MODEL_CHOICES[number]["id"]
 export type Phase = "idle" | "connecting" | "listening" | "thinking" | "speaking"
 
@@ -233,8 +233,14 @@ const uid = () => Math.random().toString(36).slice(2, 10)
 const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []
 export function useRealtimeVoice() {
   const [phase, setPhase] = useState<Phase>("idle")
-  const [model,setModel]=useState<SpeechModel>("ngen-4.5-sansar")
-  const modelRef=useRef<SpeechModel>("ngen-4.5-sansar")
+  const [customPrompt, setCustomPrompt] = useState("")
+  const customPromptRef = useRef("")
+  const updateCustomPrompt = (value: string) => {
+    customPromptRef.current = value
+    setCustomPrompt(value)
+  }
+  const [model,setModel]=useState<SpeechModel>("ngen-4-realtime")
+  const modelRef=useRef<SpeechModel>("ngen-4-realtime")
   const [messages, setMessages] = useState<MessageView[]>([])
   const [turns, setTurns] = useState<TurnView[]>([])
   const [userDraft, setUserDraft] = useState("")
@@ -612,7 +618,7 @@ export function useRealtimeVoice() {
         const res = await fetch("/api/speech/audio/turn", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Speech-Model":modelRef.current },
-          body: JSON.stringify({ input:text, messages:history.slice(0,-1).slice(-14), speak:voiceOnRef.current }),
+          body: JSON.stringify({ input:text, messages:history.slice(0,-1).slice(-14), speak:voiceOnRef.current, customPrompt:customPromptRef.current }),
           signal: abort.signal,
         })
         if (!res.ok || !res.body) {
@@ -1103,7 +1109,7 @@ export function useRealtimeVoice() {
     setNotice(`${MODEL_CHOICES.find(m=>m.id===next)?.label} selected. Start a session or type a message. Conversation history is kept.`)
   },[stop])
   return {
-    model,selectModel,
+    model,selectModel,customPrompt,updateCustomPrompt,
     audioBlocked,
     enableAudio,
     phase,

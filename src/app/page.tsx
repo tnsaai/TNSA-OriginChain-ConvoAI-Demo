@@ -28,11 +28,10 @@ import Orb from "@/components/realtime-voice/voice-orb"
 import { MODEL_CHOICES, type MessageView, type Phase, type ToolCallView, type TurnView, useRealtimeVoice } from "@/components/realtime-voice/use-realtime-voice"
 import { cn } from "@/lib/utils"
 const SUGGESTIONS = [
-  "Where's order OC-20417, and will it rain in Mumbai?",
-  "ABC's provisioning is stuck. Is Frankfurt healthy?",
-  "When is my next meeting with Meridian?",
-  "What does the Enterprise plan include?",
-  "Open an urgent ticket for ABC about replication lag",
+  "What products are available, and which have the highest ratings?",
+  "Show me orders placed through each sales channel.",
+  "Which products are running low on stock?",
+  "Which mutual fund schemes are available in each category?",
 ]
 
 const PHASE_LABEL: Record<Phase, string> = {
@@ -66,9 +65,7 @@ export default function RealtimeVoicePage() {
   const busy = voice.phase === "thinking" || voice.phase === "speaking"
 
   return (
-    // On desktop the playground is pinned to the viewport (header 4rem + bottom padding 1rem) and each panel scrolls
-    // inside itself. flex-none matters: as a flex-1 item of the growing layout column it would size to its content.
-    <div className="flex flex-col gap-4 lg:h-[calc(100svh-2rem)] lg:flex-none lg:overflow-hidden">
+    <div className="flex min-h-[calc(100svh-2rem)] flex-col gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -89,16 +86,21 @@ export default function RealtimeVoicePage() {
         </button>
       </div>
 
+      <aside className="rounded-2xl border bg-muted/30 p-4">
+        <label htmlFor="custom-prompt" className="block text-sm font-semibold">Custom instructions</label>
+        <p className="mt-1 text-xs text-muted-foreground">Guide the agent’s responses for this session.</p>
+        <textarea id="custom-prompt" value={voice.customPrompt} onChange={event => voice.updateCustomPrompt(event.target.value)} maxLength={4000} rows={3} className="mt-2 w-full rounded-xl border bg-background p-3 text-sm" placeholder="Describe how the agent should answer..." />
+      </aside>
       <div className="flex flex-wrap items-center gap-3">
         <div role="group" aria-label="Voice model" className="inline-flex flex-wrap gap-1 rounded-2xl bg-muted/60 p-1">
           {MODEL_CHOICES.map(choice=><button key={choice.id} type="button" aria-pressed={voice.model===choice.id} onClick={()=>voice.selectModel(choice.id)} className={cn("rounded-xl px-4 py-2 text-sm font-medium transition-colors",voice.model===choice.id?"bg-background text-foreground shadow-sm":"text-muted-foreground hover:text-foreground")}>{choice.label}</button>)}
         </div>
-        <p className="text-xs text-muted-foreground">{voice.model==="ngen-4.5-sansar"?"Sansar voice inference":"Older API"} · Switching stops the active session and keeps the conversation.</p>
+        <p className="text-xs text-muted-foreground">NGen 4 Realtime</p>
       </div>
 
       {voice.notice ? <div className="rounded-xl bg-amber-500/10 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-200">{voice.notice}{voice.audioBlocked ? <button type="button" onClick={() => void voice.enableAudio()} className="ml-3 rounded-full bg-foreground px-3 py-1 text-background">Enable sound</button> : null}</div> : null}
 
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
+      <div className="grid min-h-[600px] flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
         <Conversation messages={voice.messages} draft={voice.userDraft} />
 
         {/* Orb and controls */}

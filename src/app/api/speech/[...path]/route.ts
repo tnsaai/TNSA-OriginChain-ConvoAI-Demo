@@ -47,7 +47,7 @@ async function relay(req: Request, context: { params: Promise<{path: string[]}> 
   }
   const headers = new Headers({"Content-Type":req.headers.get("content-type") || "application/json"})
   const model=req.headers.get("x-speech-model")
-  if(model && !["ngen-4.5-sansar","ngen-4-realtime"].includes(model))return Response.json({error:"Unknown speech model"},{status:400})
+  if(model && model !== "ngen-4-realtime")return Response.json({error:"Unknown speech model"},{status:400})
   if(model)headers.set("X-Speech-Model",model)
   if (external && process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET) {
     headers.set("CF-Access-Client-Id", process.env.CF_ACCESS_CLIENT_ID)
